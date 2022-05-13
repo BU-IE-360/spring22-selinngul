@@ -1,0 +1,219 @@
+---
+title: "Homework 2: Forecasting With Regression"
+output: html_document
+---
+#Selin Gül - 2018402216
+
+
+
+The aim of this homework is forecasting the sales of Unleaded gasoline sale (UGS) for every quarter of 2007 by using time series regression methods. We’re given gasoline and diesel sales (in 1000 m3) of a major distributor between 2000 and 2006 and several potential independent variables related to the objective variable. The statistical characteristics of the data are examined and the linear regression model is implement to forecast the asked sales. 
+
+Required packages are installed first:
+```{r}
+library(readxl)
+library(lubridate)
+library(zoo)
+library(ggplot2)
+library(RcppRoll)
+library(GGally)
+library(skimr)
+library(forecast)
+library(dplyr)
+library(data.table)
+```
+
+## 1) Data Gathering and Manipulations
+
+```{r}
+data_UGS <- read_excel("/Users/Macbook/Desktop/IE360_Spring22_HW2_data.xlsx")
+
+colnames(data_UGS)= c("Quarter","UGS","RNUV","NLPG","PU","PG","NUGV","NDGV",
+                "GNPA","GNPC","GNP")
+data_UGS$Quarter= as.Date(as.yearqtr(data_UGS$Quarter,format="%Y_Q%q"))
+head(data_UGS)
+
+```
+
+The variables:
+
+UGS: Unleaded gasoline sale for the given quarter
+
+RNUV: An index that indicates the rate of new unleaded gasoline by using vehicles being added to the traffic in a quarter
+
+PU: Average price (adjusted with an index) of a liter of unleaded gasoline for the given quarter
+
+PG: Average price (adjusted with an index) of a liter of diesel gasoline for the given quarter
+
+NUGV: Number of unleaded gasoline using vehicles in the traffic
+
+NDGV: Number of diesel gasoline using vehicles in the traffic (per 1000 people)
+
+GNPA: Agriculture component of Gross National Product (adjusted with an index)
+
+GNPC: Commerce component of Gross National Product (adjusted with an index)
+
+GNP: Grand total for GNP (agriculture, commerce and other components total)
+
+
+## 2) Data Visualizations Before Regression
+
+```{r}
+ggplot(data_UGS, aes(x=Quarter,y=UGS))+geom_line()+geom_point()+
+  labs(title = "Unleaded Gasoline Sales Over the Quarters")+theme_classic()+scale_x_date(date_breaks = "1 year", date_labels = "%Y")
+```
+
+The declining behavior with respect to time in the data can be seen easily at first sight. Also, the sharp increase in third quarter for every year can be the indication of the seasonality. 
+
+```{r}
+meanOfSales=roll_mean(data_UGS$UGS[1:28],4,align='left')
+varOfSales=roll_var(data_UGS$UGS[1:28],4,align='left')
+plot(meanOfSales,
+     type='l',col='pink',
+     xlab = "time (t)",
+     ylab = "Rolling Mean",
+     main = "Mean series")
+```
+
+```{r}
+plot(varOfSales,
+     type='l',col='pink',
+     xlab = "time (t)",
+     ylab = "Rolling Variance",
+     main = "Variance series")
+```
+
+From the rolling mean series of UGS, it's obvious that the data isn't stationary. However, we have no clear clue if the data is non-stationary with respect to its variance just by looking to the rolling variance of it. 
+
+```{r}
+acf(data_UGS$UGS,lag.max=12,na.action=na.pass)
+```
+
+There is a high auto-correlation at lag 1 and lag 4, which can be indication about the trend and seasonality in the data respectively. 
+
+
+## 3) Model Building for Linear Regression
+
+In this step, the variables and two lag conditions will be added one by one and the Adjusted R-squared and p-values will be examined. If the added variable has a significant effect, meaning that it has a relatively high impact on the increasing value of the Adjusted R-squared and decreasing value of p-value, then it will remain in the model and the next variable will be tried with the same sequence. Also note that the seasonality variable is added as 'Quarter' and trend variable as 'Trend', which is as a series from 1 to 32.  
+
+```{r}
+Quarter=seq(1,4,by=1)
+data_UGS=cbind(data_UGS,Quarter)
+modelQuarters=lm(UGS~Quarter,data=data_UGS)
+summary(modelQuarters)
+```
+Seasonality(Quarter) has a strong correlation with UGS and it will be in the model. 
+
+
+```{r}
+Trend=seq(1,32,by=1)
+data_UGS=cbind(data_UGS,Trend)
+modelTrend=lm(UGS~Quarter+Trend,data=data_UGS)
+summary(modelTrend)
+```
+Trend variable was added and it has also important effect on increased Adjusted R-squared and decreased p-value, it will be in the final model.
+
+
+```{r}
+modelRNUV =lm(UGS~Quarter+Trend+RNUV,data=data_UGS)
+summary(modelRNUV)
+```
+RNUV variable was added and it has important effect on increased Adjusted R-squared and decreased p-value, it will be in the final model.
+
+
+```{r}
+modelNLPG =lm(UGS~Quarter+Trend+RNUV+NLPG,data=data_UGS)
+summary(modelNLPG)
+```
+NLPG variable was added and it has important effect on increased Adjusted R-squared, it will be in the final model.
+
+
+```{r}
+modelPU =lm(UGS~Quarter+Trend+RNUV+NLPG+PU,data=data_UGS)
+summary(modelPU)
+```
+Since adding PU variable has very small and reducing effect on Adjusted R-squared, it will not be on the final model.
+
+
+```{r}
+modelPG =lm(UGS~Quarter+Trend+RNUV+NLPG+PG,data=data_UGS)
+summary(modelPG)
+```
+Since adding PG variable has very small and reducing effect on Adjusted R-squared, it will not be on the final model.
+
+
+```{r}
+modelNUGV =lm(UGS~Quarter+Trend+RNUV+NLPG+NUGV,data=data_UGS)
+summary(modelNUGV)
+```
+Since adding NUGV variable has very small and reducing effect on Adjusted R-squared, it will not be on the final model.
+
+
+```{r}
+modelNDGV =lm(UGS~Quarter+Trend+RNUV+NLPG+NDGV,data=data_UGS)
+summary(modelNDGV)
+```
+Since adding NDGV variable has very small and reducing effect on Adjusted R-squared, it will not be on the final model.
+
+
+```{r}
+modelGNPA =lm(UGS~Quarter+Trend+RNUV+NLPG+GNPA,data=data_UGS)
+summary(modelGNPA)
+```
+GNPA has a high impact on Adjusted R-squared, so it will be in the final model. 
+
+
+```{r}
+modelGNPC =lm(UGS~Quarter+Trend+RNUV+NLPG+GNPA+GNPC,data=data_UGS)
+summary(modelGNPC)
+```
+Since adding GNPC variable has very small and reducing effect on Adjusted R-squared, it will not be on the final model.
+
+
+```{r}
+modelGNP =lm(UGS~Quarter+Trend+RNUV+NLPG+GNPA+GNP,data=data_UGS)
+summary(modelGNP)
+```
+Since adding GNP variable has very small and reducing effect on Adjusted R-squared, it will not be on the final model.
+
+
+```{r}
+data_UGS$NUGVlag1=lag(data_UGS$NUGV,1)
+modelLag1=lm(UGS~Quarter+Trend+RNUV+NLPG+GNPA+NUGVlag1, data=data_UGS)
+summary(modelLag1)
+```
+Since adding Lag 1 (NUGVlag1) value has very small and reducing effect on Adjusted R-squared, it will not be on the final model.
+
+```{r}
+data_UGS$UGSlag1=lag(data_UGS$UGS,1)
+modelFinal =lm(UGS~Quarter+Trend+RNUV+NLPG+GNPA+UGSlag1,data=data_UGS)
+summary(modelFinal)
+```
+UGSLAG1 has a high impact on Adjusted R-squared, so it will be in the final model. 
+
+```{r}
+checkresiduals(modelFinal$residuals)
+```
+We can check the model validity from residuals that have fair auto-correlation and seem to be normally distributed. So, we can continue with this model. (Additionally the predicted values and the actual data is compared in a same graph which I will add separately to my journal, it work on R-studio but couldn't work on HTML format unfortunatelly)
+
+
+
+
+
+## 4) Forecasting With Regression
+
+Prediction of remaining four quarters' sales:
+```{r}
+pred_2007= data_UGS[29:32,c("Quarter","Trend","RNUV","NLPG","GNPA","UGSlag1")]
+prediction = c(0,0,0,0)
+
+for(i in 1:4) {
+  prediction[i] = predict(modelFinal,newdata = pred_2007[i,])
+  if(i<4){pred_2007[i+1,"UGSlag1"] = prediction[i] }
+}
+prediction
+```
+
+
+## 5) Conclusion
+
+The aim of this homework was analyzing UGS data with respect to several independent variables and forecasting its sales for every quarter of 2007 by using time series regression methods. In the end, my selected model suggested that UGS depends on seasonality, trend, RNUV, NLPG, GNPA and lag value.  
