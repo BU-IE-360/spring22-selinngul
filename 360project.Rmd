@@ -1,0 +1,484 @@
+---
+title: "IE360 Term Project - Ertuğrul Uyar, Gizem Gökten, Selin Gül"
+output:
+  html_document:
+    df_print: paged
+---
+# Introduction
+### Problem Description
+
+In this report, the aim is to analyze the given data in a statistical perspective with the help of R. Then to implement regression and time series analysis for forecasting  solar energy production and examine the regression model in terms of goodness of fit and residual standard error whereas time series model  in terms of the error metrics like AICc and BIC. 
+During the ‘Competition Phase’ we are expected to forecast hourly solar energy production of KIVANC 2 GES (Güneş Enerjisi Santrali). The given data includes weather measurements for nine locations nearby the solar power plant and it’s in hourly form from February 1st 2021 to the last day of updated data. For each day, we are provided production data that consists of hourly production values and weather data that consists of hourly values at the given coordinates (latitude and longitude) with some variables. The data contains 4 weather variables; DSWRF, REL_HUMIDITY, CLOUD_LOW_LAYER, TEMP and each will be explained briefly;
+
+TEMP : Temperature at the provided location. We may expect to see seasonality in the temperature data. And although it seems that there can be positive correlation between temperature and solar power production, it’s important to mention that high temperatures can decrease the efficiency of panels. 
+
+REL_HUMIDITY :  Relative humidity at the provided location which “indicates a present state of absolute humidity relative to a maximum humidity given the same temperature.”[1]
+
+DSWRF : The downward shortwave radiation flux. Forecasting of DSWRF is used for “building energy usage modeling and optimization”[2]. 
+
+CLOUD_LOW_LAYER : This is total cloud cover data (in terms of percentage) for low-level types of clouds.
+
+### Summary of Approach
+
+We began this report with constructing a descriptive analysis, which will be covered below. After examining the data in a broad perspective, we checked for the stationary of the data and tried to discover attributes that make it nonstationary. Then we see that data has trend and seasonality patterns so lag1 value is determined to be added to the model for representing the trend and lag24 value is determined to be added for representing daily seasonality, these steps aimed to make data stationary. Then ggpairs plot was created to analyze the correlations between regressors and the regression model was constructed with these knowledge. 
+Basically, the same steps were implemented for the ARIMA and ARIMAX models; examined data was taken into consideration, correlation between regressors were analyzed and the models were constructed in line with their statistically reasonable processes, which will be explained in later parts. 
+
+
+### Descriptive Analysis
+
+```{r}
+knitr::opts_chunk$set
+include=FALSE
+require(data.table)
+require(lubridate)
+require(zoo)
+require(forecast)
+library(tseries)
+library(ggplot2)
+library(GGally)
+library(Metrics)
+library(dplyr)
+library(RcppRoll)
+data_path="~/Documents/R /production.csv"
+production = fread(data_path)
+production[,date:=as.Date(date)]
+data_path2="~/Documents/R /long_weather.csv"
+l_weather = fread(data_path2)
+l_weather[,date:=as.Date(date)]
+#long format -> wide format
+w_weather=dcast(l_weather,date+hour~variable+lat+lon,value.var="value")
+w_weather$month=as.numeric(format(w_weather$date,format="%m"))
+#adding production values from production data
+data=merge(production,w_weather,by=c("date","hour"))
+data$month=as.numeric(format(data$date,format="%m"))
+alldata<- data.table(data,production$production)
+
+#taking averages of four weather-related variables
+w_weather$cloud <- rowMeans(w_weather[,3:11 ])
+w_weather$dswrf <- rowMeans(w_weather[,12:20 ])
+w_weather$relhum <- rowMeans(w_weather[,21:29 ])
+w_weather$temp <- rowMeans(w_weather[,20:38 ])
+
+#creating a data frame consisting of averages of those variables in order to examine their overall pairwise relationsihps 
+df <- data.frame(w_weather[,1],w_weather[,2],w_weather[,39],w_weather[,40],w_weather[,41],w_weather[,42],w_weather[,43])
+
+#adding production values in that data frame
+finaldata=merge(production,df,by=c("date","hour"))
+finaldata$month=as.numeric(format(finaldata$date,format="%m"))
+
+#adding those average variables to the alldata data set
+alldata$cloud <- finaldata$cloud
+alldata$relhum <- finaldata$relhum
+alldata$temp <- finaldata$temp
+alldata$dswrf <- finaldata$dswrf
+
+#creating data sets for four vaiables with their lattitude and longtitude variables in order to examine their inner correlation based
+df1 <- data.frame(w_weather[,1],w_weather[,39],w_weather[,2],w_weather[,3],w_weather[,4],w_weather[,5],w_weather[,6],w_weather[,7],w_weather[,8],w_weather[,9],w_weather[,10],w_weather[,11])
+df2 <- data.frame(w_weather[,1],w_weather[,39],w_weather[,2],w_weather[,12],w_weather[,13],w_weather[,14],w_weather[,15],w_weather[,16],w_weather[,17],w_weather[,18],w_weather[,19],w_weather[,20])
+df3 <- data.frame(w_weather[,1],w_weather[,39],w_weather[,2],w_weather[,21],w_weather[,22],w_weather[,23],w_weather[,24],w_weather[,25],w_weather[,26],w_weather[,27],w_weather[,28],w_weather[,29])
+df4 <- data.frame(w_weather[,1],w_weather[,39],w_weather[,2],w_weather[,30],w_weather[,31],w_weather[,32],w_weather[,33],w_weather[,34],w_weather[,35],w_weather[,36],w_weather[,37],w_weather[,38])
+
+#adding date filters for missing values
+modeldf1 <- df1 %>% dplyr::filter(date <= "2022-05-06" & date != "2021-02-20" & date != "2021-08-09" & date != "2021-08-10" & date != "2021-08-11" & date != "2022-01-13" & date != "2022-01-14")
+#adding production values to check the correlation between production and 9 variables based on each weather-related variables
+finaldf1<- data.table(modeldf1,production$production)
+
+modeldf2 <- df2 %>% dplyr::filter(date <= "2022-05-06" & date != "2021-02-20" & date != "2021-08-09" & date != "2021-08-10" & date != "2021-08-11" & date != "2022-01-13" & date != "2022-01-14")
+finaldf2<- data.table(modeldf2,production$production)
+
+modeldf3 <- df3 %>% dplyr::filter(date <= "2022-05-06" & date != "2021-02-20" & date != "2021-08-09" & date != "2021-08-10" & date != "2021-08-11" & date != "2022-01-13" & date != "2022-01-14")
+finaldf3<- data.table(modeldf3,production$production)
+
+modeldf4 <- df4 %>% dplyr::filter(date <= "2022-05-06" & date != "2021-02-20" & date != "2021-08-09" & date != "2021-08-10" & date != "2021-08-11" & date != "2022-01-13" & date != "2022-01-14")
+finaldf4<- data.table(modeldf4,production$production)
+
+```
+
+Plotting the hourly solar energy production:
+```{r}
+ggplot()+
+  geom_line(data=alldata, aes(x=date, y=V2, color=V2),size=1)+
+  xlab('Time') +
+  ylab('Solar Energy Production') + 
+  labs(title="Hourly Solar Energy Production from February 2021 to May 2022") +
+  theme_minimal() +
+  theme(legend.position="none",plot.title=element_text(hjust=0.5), 
+        axis.line = element_line(colour="gray", size=0.8))
+```
+This plot is not very easy to interpret and cannot give insights at first sight. Therefore, rather than examining hourly series to find patterns, we are to evalute the daily time series of the solar production.
+
+Aggregating the hourly data into daily data and plotting the daily time series of solar energy production:
+```{r}
+dailydata <- alldata %>%
+  group_by(date) %>%
+  summarize(sum = sum(V2))
+
+ggplot()+
+  geom_line(data=dailydata, aes(x=date, y=sum, color=sum),size=1)+
+  xlab('Time') +
+  ylab('Solar Energy Production') + 
+  labs(title="Daily Solar Energy Production from February 2021 to May 2022") +
+  theme_minimal() +
+  theme(legend.position="none",plot.title=element_text(hjust=0.5), 
+        axis.line = element_line(colour="gray", size=0.8))
+```
+We can deduce from this plot that the solar energy production increases in summer and decreases in winter. We cannot conclude that the seasonality is stable across all years since we do not have enough data to reach this claim. Another observation is that the variance in winter months are higher than during the summer, which is somehow reasonable since in summer, the amount of sunshine is more consistent than it is in winter.
+
+
+Aggregating hourly times series data into weekly data and plotting the weekly solar energy production to check if we catch a more interpretible pattern:
+```{r}
+alldata$week <-  floor_date(alldata$date, "week")
+
+
+weeklydata <- alldata %>%
+  group_by(week) %>%
+  summarize(sum = sum(V2))
+
+ggplot(weeklydata, aes(x=week, y=sum)) +
+  geom_line(size = 1, color="red2") +
+  labs(title ="Weekly Solar Energy Production from February 2021 to May 2022", 
+       x = "Date",
+       y = 'Solar Energy Production') +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+We can see the observations that we deduce from daily data more clear in this weekly time series. As we are interested to predict in may and june, we can have a first impression of getting higher production rates as the time passes.
+
+Autocorrelation function to check if there is an existing pattern to be extracted:
+```{r}
+plot(acf(alldata$V2, lag.max = 200, plot=FALSE), main = "Autocorrelation of Hourly Solar Energy Production", 
+     col="purple", lwd=2, xlab="Lag in Hours") 
+
+```
+We can see from the autocorelation function that the solar energy production data shows a seasonal pattern. Since it is the hourly data and the data shows a pattern that repeats itself every 24 hours, it can obviously be said that there is a daily seasonality, that is, the pattern repeats itself in a daily manner, consecutive hours shows similar behaviour and same hours of the days reveal a similar production value.
+
+
+```{r}
+plot(acf(dailydata$sum, plot=FALSE,lag.max=60), main = "Autocorrelation of Daily Solar Energy Production)", 
+     col="orange", lwd=2,xlab="Lag in Days") 
+```
+The daily autocorrelation function shows always positive autocorrelation between consecutive days and does not reveal a weekly pattern.
+
+In order to see the correlation between desired lags without being affected by the lags between these two desired lags, we are to check the partial autocorrelation function:
+```{r}
+plot(pacf(alldata$V2, lag.max = 200, plot=FALSE), main = "Partial Autocorrelation of Hourly Solar Energy Production", 
+     col="purple", lwd=2, xlab="Lag in Hours") 
+```
+The partial autocorrelation function reveals that there are a lot of significant spikes but the most important ones are Lag1 and Lag24. We can suggest from Lag1 that there is a trend component in this time series and we can deduce from Lag24, 48, 72... that there is a daily seasonality, as we deduced from previous plots. 
+
+Partial autocorrelation function of daily time series data of solar energy production:
+```{r}
+plot(pacf(dailydata$sum, plot=FALSE,lag.max=60), main = "Partial Autocorrelation of Daily Solar Energy Production", 
+     col="orange", lwd=2,xlab="Lag in Days")
+```
+This plot reveals nothing new that can contribute to our model selection process. The most significant spike is at lag1 although there are some spikes at lag2 an lag3, which may be helpful, therefore important to keep in mind during the model building process.
+
+```{r}
+ggplot(alldata%>%filter(date<"2022-05-20"), aes(x=V2)) +
+  geom_histogram(aes(y=..density..), colour="blue", fill="lightcyan", bins = 20)+ 
+  geom_density(alpha=.2, fill="purple", colour="navy") +
+  labs(title = "Histogram of Amount of Solar Energy Produced", 
+       x = "Hourly Amount of Solar Energy Produced",
+       y = "Density") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+This histogram revels that, after exluding zeros from the interpretation since there are a lot of dark hours for every day, the rest  approximately follows a uniform distribution, which means violating the normality assumption. 
+
+In order to check the stationarity and transformation requirement of the data, the roll-mean and roll-var plots are given:
+```{r}
+meanprod=roll_mean(dailydata$sum,4,align='left')
+plot(meanprod,
+     type='l',col='magenta',
+     xlab = "time (t)",
+     ylab = "Rolling Mean",
+     main = "Mean series")
+```
+We can see that there is a seasonal pattern in the data, which means that the data is not stationary.
+
+```{r}
+varprod=roll_var(dailydata$sum,4,align='left')
+plot(varprod,
+     type='l',col='green',
+     xlab = "time (t)",
+     ylab = "Rolling Variance",
+     main = "Variance series")
+```
+From variance series, we can see that the variance does not show any pattern, meaning that the data idoes not need to be transformed. In order to eliminate non-stationarity from our data, we can difference the series and move on from differenced data to build some of our models.
+
+In order to check the correlations beetween production data and the mean values of the four variables, ggpairs is used:
+
+```{r}
+ggpairs(finaldata)
+```
+We can see that there are significant correlations between the production value and the temp, dswrf, and relhum variables. These are to be used during the model building and their significances are to be checked again.
+
+In order to further examine the relationship between production amounts and the variables, four variables' lattitude and longtitude based amounts and production amounts are plotted using ggpairs:
+
+For CLOUD_LOW_LAYER:
+```{r}
+ggpairs(finaldf1)
+```
+We can see that the most correlated value of this variable with production is when the lattitude is 36.75 and the longtitude is 33.25.
+
+For DSWRF:
+```{r}
+ggpairs(finaldf2)
+```
+We can see that the most correlated value of this variable with production is when the lattitude is 36.25. and the longtitude is 33.
+
+For REL_HUMIDITY:
+```{r}
+ggpairs(finaldf3)
+```
+We can see that the most correlated value of this variable with production is when the lattitude is 36.50 and the longtitude is 33.50.
+
+For TEMP:
+```{r}
+ggpairs(finaldf4)
+```
+We can see that the most correlated value of this variable with production are when the lattitude is 36.25 and the longtitude is 33.25 and the lattitude is 36.25 and the longtitude is 33.50.
+
+These variables are to be checked to see if they are reasonable to use in our models.
+
+In order to check the stationarity of the data, we can additionally excercise the KPSS test:
+```{r}
+hourdata <- alldata %>% dplyr::filter( hour=="12" )
+
+require(urca)
+unt_test=ur.kpss(hourdata$V2) 
+summary(unt_test)
+```
+From the test results, we can see that the test-statistic is reasonably high and therefore we reject the null hypothesis of having a stationary data and will take necessary actions.
+
+
+
+
+# Literature Review
+
+Forecasting is a very significant process to determine the features of a process, service and facility starting from their design processes. Also it should be continued as long as they serve in order to improve their processes and use the resources effectively. In this manner, forecasting solar power production has a powerful impact on determining the distribution of energy. Besides this, since it’s a sustainable energy production, optimizing its processes would be a game-changer movement both for the production and consumption of the energy.
+
+In that sense, several articles are reviewed to gain a comprehensive background. And even though we are given the weather variables not to make detailed searches about them but to follow a data-driven approach to understand them, the importance of forecasting the downward shortwave radiation flux impresses us. Estimation of surface downward shortwave radiation over China from AVHRR data based on four machine learning methods paper fascinated us as emphasizing the importance of forecasting DSWRF values accurately and it was very inspiring the way they perform forecasts. 
+
+Other than that, we found various articles about forecasting solar energy production, Assessment of forecasting techniques for solar power production with no exogenous inputs[4], Online short-term solar power forecasting[5] and 2D-interval forecasts for solar power production[6] are some examples of work of art. Away from seeing their methodologies while working on similar projects, they are very helpful to gain a perception about the influential and challenging parts of the study.
+
+# Approach
+
+Our general approach is to build regresion model, ARIMA model and ARIMA with regressors model.Even if we decided to move forward with ARIMAX, these three approaches are explained.
+
+First: we divided the data into test and training sets to evaluate the performances of the models.
+```{r}
+
+#creating training and test data sets based on 80-20 rule in order to check the validity of our model built on training set based on test set
+alldatatr <- alldata[1:8716,]
+alldatatr <- alldatatr[month==5|month==6 & hour>=6 & hour<=19]
+alldatate <- alldata[8717:10896,]
+alldatate <- alldatate[month==5|month==6 & hour>=6 & hour<=19]
+```
+
+For the regression model:
+
+We used the variables that seem to be significant during the analysi:
+```{r}
+reg1 <- lm(V2~month+hour+relhum+dswrf+CLOUD_LOW_LAYER_36.75_33.25+REL_HUMIDITY_36.5_33.5+TEMP_36.25_33.25+TEMP_36.25_33.5+TEMP_36.5_33.5,alldatatr[month==5|month==6 & hour>=5 & hour<=20])
+summary(reg1)
+```
+Based on the stars that show the significance levels, we exlude relhum, REL_HUMIDITY and TEMP variables.
+
+
+```{r}
+reg2 <- lm(V2~month+hour+dswrf+CLOUD_LOW_LAYER_36.75_33.25+TEMP_36.25_33.25+TEMP_36.5_33.5,alldatatr[month==5|month==6 & hour>=5 & hour<=20])
+summary(reg2)
+```
+Adjusted R-squared value decresed, therefore, we did not exclude some variables that we decided not to move on with.
+
+We saw from the descriptive analysis that there are some significant spikes and a seasonality. Therefore, we added corresponding varibales:
+```{r}
+alldatatr <- alldatatr[,seasonality:=(1:.N)%%(24*350)]
+alldatatr <- alldatatr[,Lag24:=c(rep(NA,24),alldatatr$V2[1:1140])]
+alldatatr <- alldatatr[,Lag1:=c(rep(NA,1),alldatatr$V2[1:1163])]
+```
+
+
+```{r}
+reg3 <- lm(V2~month+hour+seasonality+Lag1+Lag24+relhum+dswrf+CLOUD_LOW_LAYER_36.75_33.25+REL_HUMIDITY_36.5_33.5+TEMP_36.25_33.25+TEMP_36.25_33.5+TEMP_36.5_33.5,alldatatr[month==5|month==6 & hour>=5 & hour<=20])
+summary(reg3)
+```
+After adding those terms, the adjusted R-squared value significantly increased. However, some terms seem to be insignificant. We exclude those terms and found our final regression model as reg4 even if there occured a decrese after removing these variables in order not to cause multicollinearity.
+
+```{r}
+reg4 <- lm(V2~month+hour+Lag1+Lag24+relhum+dswrf+CLOUD_LOW_LAYER_36.75_33.25+TEMP_36.25_33.25+TEMP_36.5_33.5,alldatatr[month==5|month==6 & hour>=5 & hour<=20])
+summary(reg4)
+```
+
+
+```{r}
+checkresiduals(reg4)
+```
+This model seems to have normal distribution even if it has undesired peaks in ACF plot. Unfortunately we were not able to remove this unwanted situation.
+
+
+After finding the model, we apply the model to the test data set and get predictions. 
+```{r}
+alldatate <- alldatate[,seasonality:=(1:.N)%%(24*350)]
+alldatate <- alldatate[,Lag24:=c(rep(NA,24),alldatate$V2[1:120])]
+alldatate <- alldatate[,Lag1:=c(rep(NA,1),alldatate$V2[1:143])]
+alldatate <- alldatate[,Lag11:=c(rep(NA,11),alldatate$V2[1:133])]
+
+testdata <- data.table(alldatate[,2:3],alldatate[,11],alldatate[,32],alldatate[,36],alldatate[,40],alldatate[,43],alldatate[,45],alldatate[,48:50])
+prediction = predict(reg4,newdata = testdata)
+tail(prediction,24)
+sqrt( sum( (testdata$production - prediction)^2 , na.rm = TRUE ) / sum( !is.na(prediction) ) ) #rmse 
+```
+For the ARIMA model:
+
+We built our model to predict hourly production amount and in order to do so, we built model for every hour for which there is a production, which means we excluded 0 production hours: from 20 to 05 and perform forecasting for each hours between and including 06-19. Here is the example for hour==12 and we get the result for each hour by changing the hour variable by hand.
+
+First, we differenced the data as we found out that the data is not stationary.
+```{r}
+hourdata <- alldata %>% dplyr::filter( hour=="12" )
+hourdata[,differ:=V2-shift(V2,5)]
+ggplot(hourdata,aes(x=date)) + geom_line(aes(y=differ))
+```
+After that, we applied KPSS test to see if there needs to be further differencing
+
+```{r}
+unt_test=ur.kpss(hourdata$differ) 
+summary(unt_test)
+```
+Since the test-statistic is reasonably small, there is no need to difference the data further.
+
+```{r}
+acf(hourdata[complete.cases(hourdata)]$differ)
+```
+Looking at the PCF plot, we see that there are two significant spikes at lag 1 and 5.
+
+```{r}
+pacf(hourdata[complete.cases(hourdata)]$differ)
+```
+From the PACF plot, we can see that there are significant spikes at lag 1, 5,10,15..
+
+
+In order to find the appropriate ARIMA model, we used auto.arima function:
+```{r}
+fitted=auto.arima(hourdata$differ,seasonal=F,trace=T,stepwise=F,approximation=F)
+
+fitted
+```
+It gave us the ARIMA(5,0,0) model to use.
+
+After having the model, we used it to perform forecasting and get the results:
+```{r}
+
+nahead=1
+forecasted=forecast(fitted,h=nahead)
+forecasted
+
+temporary=copy(hourdata)
+
+test=hourdata[1:nahead]
+test[,V2:=NA]
+test$date=max(hourdata$date)+c(1:nahead)
+test[,predicted_differ:=as.numeric(forecasted$mean)]
+
+temporary=rbindlist(list(temporary,test),fill=T,use.names=T)
+temporary[is.na(predicted_differ),predicted_differ:=differ] # past values are known
+
+# transforming to the original scale
+temporary[,forecastval:=predicted_differ+shift(V2,5)]
+tail(temporary,10)
+```
+
+ARIMAX
+
+We added CLOUD_LOW_LAYER variable to our arima model
+```{r}
+hourdata[,cloud_diff:=CLOUD_LOW_LAYER_36.25_33-shift(CLOUD_LOW_LAYER_36.25_33,5)]
+hourdata[,res:=c(rep(NA,5),as.numeric(fitted$residuals))]
+
+```
+
+
+```{r}
+complete_dat=hourdata[!is.na(differ)]
+complete_dat=complete_dat[year(date)==2022 & month(date) %in% c(3:5)]
+reg_matrix=cbind(complete_dat$cloud_diff) # can add more if any other regressors exist
+
+fitted_arimax=auto.arima(complete_dat$differ,xreg=reg_matrix,seasonal=F,trace=T,stepwise=F,approximation=F)
+
+fitted_arimax
+
+```
+
+
+```{r}
+nahead=2
+forecasted=forecast(fitted_arimax,xreg=tail(reg_matrix,1),h=nahead)
+forecasted
+
+temporary=copy(complete_dat)
+
+test=hourdata[1:nahead]
+test[,V2:=NA]
+test[,CLOUD_LOW_LAYER_36.25_33:=NA]
+test$date=max(hourdata$date)+c(1:nahead)
+test[,predicted_differ:=as.numeric(forecasted$mean)]
+
+temporary=rbindlist(list(temporary,test),fill=T,use.names=T)
+temporary[is.na(predicted_differ),predicted_differ:=differ] # past values are known
+
+# transforming to the original scale
+temporary[,forecastval:=predicted_differ+shift(V2,5)]
+tail(temporary,10)
+```
+
+# Results
+
+Hourly production amounts are mostly reasonable and with some exceptions, our model gave an average error rate comparing to the other contestants. Since we did not prepare a model evaluation by wMAPE and other metrics such as fBias, as we are to mention in future work, we could not provide a formal comparison of our models and corresponding results.
+
+
+# Comments, Conclusion, and Future Work
+
+In conclusion, we built three models and used ARIMAX model to predict future values. Beforehand, we perform descriptive analysis to understand the data and which actions were needed. Then, we built our model in such a way that gave us the prediction for each our by changing hour value by hand.
+
+Forecasting solar energy production based on weather was a challenging task involving dedicated research, evaluation and reevaluation, and high analytical skills. 
+
+When it comes to what we could do better:
+Rather than forecasting every hour one by one, we could come up with more efficient and effective solution, such as dividing time slots.
+We could do a more comprehensive descriptive analysis and work more on to transform the data into desired form containing no stationarity, with normal distribution and no significant spikes at ACF and PACF values. 
+In addition, we could do more work on how to evaluate our models based on wMAPE and other metrics. 
+Even if we tried to make our model better during the submission phase, we did not change our model thoroughly. For example, rather than using CLOUD_LOW_LAYER variable in our ARIMAX model, we could use some other significant variables.
+
+# References
+
+[1]  “Humidity”, Wikipedia, 21 May 2022, 
+https://en.wikipedia.org/wiki/Humidity
+
+[2] “DATA PRODUCTS: DOWNWARD SHORTWAVE RADIATION (SURFACE)”, Goes-R, 
+https://www.goes-r.gov/products/baseline-DSR.html#:~:text=The%20downward%20shortwave%20radiation%20
+
+
+[3] Wei, Yu, et al. “Estimation of Surface Downward Shortwave Radiation over China from AVHRR Data Based on Four Machine Learning Methods.” Solar Energy, vol. 177, Jan. 2019, https://reader.elsevier.com/reader/sd/pii/S0038092X18311083?token=07EA2B09AA0A9D84214E5AAC6B8FC7C6B80C91C4DCB5FABCA519E6076121AB46BD8CA54B93AECECBCFD35D8A85C8E1E7&originRegion=eu-west-1&originCreation=20220607180421
+
+
+[4] Pedro, Hugo T. C., and Carlos F. M. Coimbra. “Assessment of Forecasting Techniques for Solar Power Production with No Exogenous Inputs - ScienceDirect.” Assessment of Forecasting Techniques for Solar Power Production with No Exogenous Inputs - ScienceDirect, May 2012, 
+https://reader.elsevier.com/reader/sd/pii/S0038092X12001429?token=F0FA289ECDF21EDD79361F914870B626D0BC43AB95951319CA0FB4AFA5D6BF6932FFA4272D47A9A104EFB1174A0FE578&originRegion=eu-west-1&originCreation=20220607181136
+
+
+[5] Bacher, Peder, et al. “Online Short-Term Solar Power Forecasting - ScienceDirect.” Online Short-Term Solar Power Forecasting - ScienceDirect, July 2009, https://reader.elsevier.com/reader/sd/pii/S0038092X09001364?token=7C6308AD219E39717D4E4C4F1FF2BDBD9C40EA5DA8D85E5F8E701C01C78392866DFF9E1CAB072A46B6393460C58867EF&originRegion=eu-west-1&originCreation=20220607181618
+
+[6] Rana, Mashud, et al. “2D-Interval Forecasts for Solar Power Production - ScienceDirect.” 2D-Interval Forecasts for Solar Power Production - ScienceDirect, September 2015,
+https://reader.elsevier.com/reader/sd/pii/S0038092X15004545?token=29759299FAAE7AC95377D3A95351FA6BA97CBAAF0A18007389776C16EEC0E7EF22F529BE6FDF3FB9500DB340978BADA3&originRegion=eu-west-1&originCreation=20220607181854
+
+
+
+
+
+
+
+
+
+
+
+
+
